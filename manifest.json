@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BombParty Helper",
-  "version": "1.1",
+  "version": "1.2",
   "description": "Extension pour trouver des mots dans BombParty",
   "permissions": ["storage"],
   "host_permissions": ["https://*.jklm.fun/*"],

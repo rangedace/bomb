@@ -1,57 +1,65 @@
-// Compatibilit\u00e9 multi-navigateurs : Firefox / Zen exposent `browser`,
-// Chrome / Edge exposent `chrome`. MV3 alise l'un sur l'autre mais on
-// s\u00e9curise l'acc\u00e8s pour \u00e9viter tout ReferenceError.
-const runtimeApi =
-  typeof browser !== "undefined" && browser.runtime
-    ? browser
-    : chrome;
+// Cross-browser runtime: Firefox/Zen expose `browser`, Chrome/Edge expose
+// `chrome`. MV3 aliases one onto the other, but we resolve it defensively.
+const runtime = (
+  typeof browser !== "undefined" && browser.runtime ? browser : chrome
+).runtime;
 
-let dictionnaire = [];
-let derniereSyllabe = "";
-let ordreTri = "court";
-let motsCliques = [];
+const MAX_RESULTS = 15;
+const MAX_TYPING_DELAY_MS = 200;
 
-function normaliser(mot) {
-  return mot
+let dictionary = [];
+let currentSyllable = "";
+let sortOrder = "short"; // "short" | "long"
+let clickedWords = new Set(); // words already submitted this game
+let currentMatches = []; // words containing currentSyllable (cached, unsorted)
+
+// UI references (created once, reused on every render).
+let panel = null;
+let sortButton = null;
+let filterInput = null;
+let wordList = null;
+
+function normalize(word) {
+  return word
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .toLowerCase();
 }
 
-fetch(runtimeApi.runtime.getURL("dictionnaire.txt"))
+fetch(runtime.getURL("dictionnaire.txt"))
   .then((response) => response.text())
   .then((data) => {
-    dictionnaire = data
+    dictionary = data
       .split("\n")
-      .map((mot) => normaliser(mot.trim()))
-      .filter((mot) => mot.length > 0);
+      .map((word) => normalize(word.trim()))
+      .filter((word) => word.length > 0);
   });
 
-function taperMot(mot) {
-  const inputTexte = document.querySelector('input.styled[type="text"]');
-  if (!inputTexte) return;
-  inputTexte.value = "";
-  inputTexte.focus();
+function typeWord(word) {
+  const input = document.querySelector('input.styled[type="text"]');
+  if (!input) return;
+
+  input.value = "";
+  input.focus();
   let index = 0;
 
-  function taperCaractere() {
-    if (index < mot.length) {
-      const caractere = mot[index];
-      inputTexte.value += caractere;
-      inputTexte.dispatchEvent(
+  function typeChar() {
+    if (index < word.length) {
+      const char = word[index];
+      input.value += char;
+      input.dispatchEvent(
         new InputEvent("input", {
-          data: caractere,
+          data: char,
           bubbles: true,
           cancelable: true,
           inputType: "insertText",
         }),
       );
       index++;
-      let delaiAleatoire = Math.floor(Math.random() * 200);
-      setTimeout(taperCaractere, delaiAleatoire);
+      setTimeout(typeChar, Math.floor(Math.random() * MAX_TYPING_DELAY_MS));
     } else {
-      ["keydown", "keypress", "keyup"].forEach((type) => {
-        inputTexte.dispatchEvent(
+      for (const type of ["keydown", "keypress", "keyup"]) {
+        input.dispatchEvent(
           new KeyboardEvent(type, {
             key: "Enter",
             code: "Enter",
@@ -61,133 +69,36 @@ function taperMot(mot) {
             cancelable: true,
           }),
         );
-      });
-      if (inputTexte.form) {
-        inputTexte.form.dispatchEvent(
-          new Event("submit", {
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
       }
-    }
-  }
-
-  taperCaractere();
-}
-
-function trierMots(mots) {
-  return mots.sort((a, b) =>
-    ordreTri === "court" ? a.length - b.length : b.length - a.length,
-  );
-}
-
-function rechercherMots(syllabe, appliquerLimite = true) {
-  const syllabeNorm = normaliser(syllabe);
-  let resultat = dictionnaire.filter((mot) => mot.includes(syllabeNorm));
-  resultat = trierMots(resultat);
-  return appliquerLimite ? resultat.slice(0, 15) : resultat;
-}
-
-function afficherMots(mots) {
-  let syllableDiv = document.querySelector(".syllable");
-  if (!syllableDiv) return;
-
-  let motsContainer = document.getElementById("mots-helper");
-  let boutonTri = document.getElementById("bouton-tri");
-  let champFiltre = document.getElementById("champ-filtre");
-
-  if (!motsContainer) {
-    motsContainer = document.createElement("div");
-    motsContainer.id = "mots-helper";
-    document.body.appendChild(motsContainer);
-
-    // Bouton de tri
-    boutonTri = document.createElement("button");
-    boutonTri.id = "bouton-tri";
-    boutonTri.innerText = "Ordre de tri";
-    boutonTri.onclick = () => {
-      ordreTri = ordreTri === "court" ? "long" : "court";
-
-      const champFiltre = document.getElementById("champ-filtre");
-      const lettres = champFiltre?.value?.toLowerCase().split("") || [];
-
-      let mots = rechercherMots(derniereSyllabe, false);
-
-      if (lettres.length > 0) {
-        mots = mots.filter((mot) => lettres.every((l) => mot.includes(l)));
-      }
-
-      afficherMots(mots.slice(0, 15));
-    };
-
-    motsContainer.appendChild(boutonTri);
-
-    // Champ filtre
-    champFiltre = document.createElement("input");
-    champFiltre.id = "champ-filtre";
-    champFiltre.placeholder = "Filtrer par lettres (ex: abce)";
-    champFiltre.type = "text";
-    champFiltre.oninput = () => {
-      const lettres = champFiltre.value.toLowerCase().split("");
-      const tousLesMots = rechercherMots(derniereSyllabe, false); // ← ne pas limiter ici
-      const motsFiltres = tousLesMots.filter((mot) =>
-        lettres.every((l) => mot.includes(l)),
+      input.form?.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
       );
-      afficherMots(motsFiltres.slice(0, 15)); // ← limite seulement ici
-    };
-
-    motsContainer.appendChild(champFiltre);
-
-    Object.assign(champFiltre.style, {
-      display: "block",
-      width: "100%",
-      marginBottom: "10px",
-      padding: "5px",
-      fontSize: "16px",
-      borderRadius: "5px",
-      border: "1px solid #ccc",
-    });
-
-    Object.assign(boutonTri.style, {
-      display: "block",
-      width: "100%",
-      marginBottom: "10px",
-      padding: "5px",
-      cursor: "pointer",
-      backgroundColor: "#fff",
-      color: "#000",
-      border: "none",
-      borderRadius: "5px",
-      fontWeight: "bold",
-    });
+    }
   }
 
-  // Nettoyage partiel, on garde les champs déjà créés
-  Array.from(motsContainer.children).forEach((child) => {
-    if (child !== boutonTri && child !== champFiltre) {
-      motsContainer.removeChild(child);
-    }
-  });
+  typeChar();
+}
 
-  // Filtrer les mots déjà cliqués
-  mots = mots.filter((mot) => !motsCliques.includes(mot));
+function sortWords(words) {
+  const factor = sortOrder === "short" ? 1 : -1;
+  return [...words].sort((a, b) => factor * (a.length - b.length));
+}
 
-  mots.forEach((mot) => {
-    let motDiv = document.createElement("div");
-    motDiv.innerText = mot;
-    motDiv.style.cursor = "pointer";
-    motDiv.onclick = () => {
-      taperMot(mot);
-      if (!motsCliques.includes(mot)) {
-        motsCliques.push(mot);
-      }
-      afficherMots(rechercherMots(derniereSyllabe));
-    };
-    motsContainer.appendChild(motDiv);
-  });
+// Derive the visible list from the cached matches: drop already-used words,
+// apply the letter filter, sort, then cap the count.
+function getDisplayWords() {
+  const letters = (filterInput?.value || "").toLowerCase().split("");
+  let words = currentMatches.filter((word) => !clickedWords.has(word));
+  if (letters.length > 0) {
+    words = words.filter((word) => letters.every((l) => word.includes(l)));
+  }
+  return sortWords(words).slice(0, MAX_RESULTS);
+}
 
-  Object.assign(motsContainer.style, {
+function buildUI() {
+  panel = document.createElement("div");
+  panel.id = "bombparty-helper";
+  Object.assign(panel.style, {
     position: "absolute",
     top: "40px",
     left: "40px",
@@ -203,26 +114,94 @@ function afficherMots(mots) {
     zIndex: "9999",
     boxShadow: "0px 0px 10px rgba(0, 0, 0, 0.5)",
   });
+
+  sortButton = document.createElement("button");
+  sortButton.id = "sort-button";
+  sortButton.innerText = "Sort order";
+  sortButton.onclick = () => {
+    sortOrder = sortOrder === "short" ? "long" : "short";
+    renderWords();
+  };
+  Object.assign(sortButton.style, {
+    display: "block",
+    width: "100%",
+    marginBottom: "10px",
+    padding: "5px",
+    cursor: "pointer",
+    backgroundColor: "#fff",
+    color: "#000",
+    border: "none",
+    borderRadius: "5px",
+    fontWeight: "bold",
+  });
+
+  filterInput = document.createElement("input");
+  filterInput.id = "filter-input";
+  filterInput.type = "text";
+  filterInput.placeholder = "Filter by letters (e.g. abce)";
+  filterInput.oninput = renderWords;
+  Object.assign(filterInput.style, {
+    display: "block",
+    width: "100%",
+    marginBottom: "10px",
+    padding: "5px",
+    fontSize: "16px",
+    borderRadius: "5px",
+    border: "1px solid #ccc",
+  });
+
+  wordList = document.createElement("div");
+  wordList.id = "word-list";
+
+  panel.append(sortButton, filterInput, wordList);
+  document.body.appendChild(panel);
 }
 
-function detecterNouvelleSyllabe() {
+function renderWords() {
+  if (!panel) buildUI();
+
+  wordList.textContent = "";
+  for (const word of getDisplayWords()) {
+    const row = document.createElement("div");
+    row.textContent = word;
+    row.style.cursor = "pointer";
+    row.onclick = () => {
+      typeWord(word);
+      clickedWords.add(word);
+      renderWords();
+    };
+    wordList.appendChild(row);
+  }
+}
+
+// Recompute matches only when the syllable actually changes.
+function handleSyllableChange() {
   const syllableDiv = document.querySelector(".syllable");
   if (!syllableDiv) return;
-  const syllabe = normaliser(syllableDiv.textContent.trim());
-  if (syllabe && syllabe !== derniereSyllabe) {
-    derniereSyllabe = syllabe;
-    const motsTrouvés = rechercherMots(syllabe);
-    afficherMots(motsTrouvés);
-  }
+
+  const syllable = normalize(syllableDiv.textContent.trim());
+  if (!syllable || syllable === currentSyllable) return;
+
+  currentSyllable = syllable;
+  currentMatches = dictionary.filter((word) => word.includes(syllable));
+  renderWords();
 }
 
-const observer = new MutationObserver(() => detecterNouvelleSyllabe());
-const observerContainer = new MutationObserver(() => {
+// Reset the used-word list whenever the syllable element (re)appears, which
+// marks the start of a new game.
+let syllablePresent = false;
+const syllableObserver = new MutationObserver(handleSyllableChange);
+const bodyObserver = new MutationObserver(() => {
   const syllableDiv = document.querySelector(".syllable");
-  if (syllableDiv) {
-    observer.observe(syllableDiv, { childList: true, subtree: true });
-    detecterNouvelleSyllabe();
-    observerContainer.disconnect();
+  if (syllableDiv && !syllablePresent) {
+    syllablePresent = true;
+    clickedWords.clear();
+    currentSyllable = "";
+    syllableObserver.observe(syllableDiv, { childList: true, subtree: true });
+    handleSyllableChange();
+  } else if (!syllableDiv && syllablePresent) {
+    syllablePresent = false;
+    syllableObserver.disconnect();
   }
 });
-observerContainer.observe(document.body, { childList: true, subtree: true });
+bodyObserver.observe(document.body, { childList: true, subtree: true });
