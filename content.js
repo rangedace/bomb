@@ -10,11 +10,13 @@ const MAX_TYPING_DELAY_MS = 200;
 let dictionary = [];
 let currentSyllable = "";
 let sortOrder = "short"; // "short" | "long"
+let cheatMode = false; // auto-type shortest word on our turn
 let clickedWords = new Set(); // words already submitted this game
 let currentMatches = []; // words containing currentSyllable (cached, unsorted)
 
 // UI references (created once, reused on every render).
 let panel = null;
+let cheatButton = null;
 let sortButton = null;
 let filterInput = null;
 let wordList = null;
@@ -35,7 +37,7 @@ fetch(runtime.getURL("dictionnaire.txt"))
       .filter((word) => word.length > 0);
   });
 
-function typeWord(word) {
+function typeWord(word, instant = false, onDone = null) {
   const input = document.querySelector('input.styled[type="text"]');
   if (!input) return;
 
@@ -56,7 +58,8 @@ function typeWord(word) {
         }),
       );
       index++;
-      setTimeout(typeChar, Math.floor(Math.random() * MAX_TYPING_DELAY_MS));
+      const delay = instant ? 0 : Math.floor(Math.random() * MAX_TYPING_DELAY_MS);
+      setTimeout(typeChar, delay);
     } else {
       for (const type of ["keydown", "keypress", "keyup"]) {
         input.dispatchEvent(
@@ -73,10 +76,47 @@ function typeWord(word) {
       input.form?.dispatchEvent(
         new Event("submit", { bubbles: true, cancelable: true }),
       );
+      onDone?.();
     }
   }
 
   typeChar();
+}
+
+// Shortest not-yet-used word for the current syllable (ignores the letter
+// filter so cheat mode always finds something to play).
+function shortestWord() {
+  let best = null;
+  for (const word of currentMatches) {
+    if (clickedWords.has(word)) continue;
+    if (!best || word.length < best.length) best = word;
+  }
+  return best;
+}
+
+// Cheat mode: if it's our turn, instantly type the shortest available word.
+// If the submission is rejected (word already used elsewhere), the input stays
+// and the syllable is unchanged, so we retry with the next shortest word.
+function autoPlay() {
+  if (!cheatMode) return;
+  const input = document.querySelector('input.styled[type="text"]');
+  if (!input) return; // not our turn
+
+  const word = shortestWord();
+  if (!word) return;
+
+  clickedWords.add(word);
+  renderWords();
+
+  typeWord(word, true, () => {
+    setTimeout(() => {
+      const syllableDiv = document.querySelector(".syllable");
+      const sameSyllable =
+        syllableDiv &&
+        normalize(syllableDiv.textContent.trim()) === currentSyllable;
+      if (cheatMode && sameSyllable) autoPlay();
+    }, 300);
+  });
 }
 
 function sortWords(words) {
@@ -114,6 +154,25 @@ function buildUI() {
     zIndex: "9999",
     boxShadow: "0px 0px 10px rgba(0, 0, 0, 0.5)",
   });
+
+  cheatButton = document.createElement("button");
+  cheatButton.id = "cheat-button";
+  cheatButton.onclick = () => {
+    cheatMode = !cheatMode;
+    updateCheatButton();
+    autoPlay();
+  };
+  Object.assign(cheatButton.style, {
+    display: "block",
+    width: "100%",
+    marginBottom: "10px",
+    padding: "5px",
+    cursor: "pointer",
+    border: "none",
+    borderRadius: "5px",
+    fontWeight: "bold",
+  });
+  updateCheatButton();
 
   sortButton = document.createElement("button");
   sortButton.id = "sort-button";
@@ -153,8 +212,15 @@ function buildUI() {
   wordList = document.createElement("div");
   wordList.id = "word-list";
 
-  panel.append(sortButton, filterInput, wordList);
+  panel.append(cheatButton, sortButton, filterInput, wordList);
   document.body.appendChild(panel);
+}
+
+function updateCheatButton() {
+  if (!cheatButton) return;
+  cheatButton.innerText = cheatMode ? "Cheat: ON" : "Cheat: OFF";
+  cheatButton.style.backgroundColor = cheatMode ? "#e74c3c" : "#fff";
+  cheatButton.style.color = cheatMode ? "#fff" : "#000";
 }
 
 function renderWords() {
@@ -185,6 +251,7 @@ function handleSyllableChange() {
   currentSyllable = syllable;
   currentMatches = dictionary.filter((word) => word.includes(syllable));
   renderWords();
+  autoPlay();
 }
 
 // Reset the used-word list whenever the syllable element (re)appears, which
